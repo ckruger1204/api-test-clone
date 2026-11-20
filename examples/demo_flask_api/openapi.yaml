@@ -1,0 +1,1409 @@
+openapi: 3.0.3
+
+info:
+  title: Flask Blog API
+  version: 1.0.0
+  description: |
+    A simple blog REST API built with Flask and SQLite.
+
+    **Features**
+
+    * Users can register / log in (JWT bearer tokens).
+    * Authenticated users can publish, edit and delete **articles**.
+    * Articles belong to a **category** and can carry multiple **hashtags**.
+    * Users can **comment** on articles and **like** them.
+
+    **Authentication**
+
+    Read endpoints (`GET`) are public. Write endpoints require a JWT access
+    token obtained from `POST /api/auth/login` (or `/register`). Send it as:
+
+    ```
+    Authorization: Bearer <access_token>
+    ```
+
+    **Try it out**
+
+    Use `POST /api/auth/register` to create an account, copy the returned
+    `access_token`, click **Authorize** and paste it to unlock the protected
+    endpoints.
+
+servers:
+  - url: http://127.0.0.1:5000
+    description: Local development server
+  - url: http://localhost:5000
+    description: Local development server (localhost)
+
+tags:
+  - name: Auth
+    description: Registration, login and profile management.
+  - name: Articles
+    description: Create and read blog articles. `GET` is public.
+  - name: Categories
+    description: Categories used to organize articles.
+  - name: Tags
+    description: Hashtags attached to articles.
+  - name: Comments
+    description: Comments written by users on articles.
+  - name: Likes
+    description: Likes added by users on articles.
+  - name: Meta
+    description: Service metadata.
+
+paths:
+  # ------------------------------------------------------------------
+  # Meta
+  # ------------------------------------------------------------------
+  /:
+    get:
+      tags: [Meta]
+      summary: API entry point
+      description: Returns basic information about the API and its documentation URLs.
+      operationId: getIndex
+      security: []
+      responses:
+        "200":
+          description: API information.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceInfo"
+
+  /health:
+    get:
+      tags: [Meta]
+      summary: Health check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ------------------------------------------------------------------
+  # Auth
+  # ------------------------------------------------------------------
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      description: |
+        Creates a new account and immediately returns a JWT access token so the
+        client does not need to log in afterwards.
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserRegisterInput"
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: The username or email is already used.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in
+      description: Authenticate with a username **or** an email address plus a password.
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserLoginInput"
+      responses:
+        "200":
+          description: Authentication succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong username/email or password.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get the current user
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPrivate"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      security:
+        - bearerAuth: []
+      tags: [Auth]
+      summary: Update the current user
+      description: Update the bio and/or the password of the authenticated user.
+      operationId: updateCurrentUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpdateInput"
+      responses:
+        "200":
+          description: The updated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPrivate"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Auth]
+      summary: Delete the current user
+      description: Deletes the account together with all of its articles, comments and likes.
+      operationId: deleteCurrentUser
+      responses:
+        "204":
+          description: Account deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ------------------------------------------------------------------
+  # Articles
+  # ------------------------------------------------------------------
+  /api/articles:
+    get:
+      tags: [Articles]
+      summary: List articles
+      description: |
+        Public endpoint listing articles. Supports filtering by category, tag,
+        author and free-text search, plus sorting and pagination.
+
+        Unpublished articles are only returned to authenticated users (and never
+        to anonymous callers).
+      operationId: listArticles
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - $ref: "#/components/parameters/PerPageParam"
+        - name: category
+          in: query
+          description: Filter by category **slug**.
+          schema:
+            type: string
+          example: technology
+        - name: tag
+          in: query
+          description: Filter by hashtag **slug**.
+          schema:
+            type: string
+          example: python
+        - name: author
+          in: query
+          description: Filter by author **username**.
+          schema:
+            type: string
+          example: alice
+        - name: q
+          in: query
+          description: Free-text search in the title, summary and content.
+          schema:
+            type: string
+          example: flask
+        - name: published
+          in: query
+          description: |
+            `true` (default) returns published articles only. `false` returns
+            your own drafts and requires authentication.
+          schema:
+            type: boolean
+          example: true
+        - name: sort
+          in: query
+          description: Sort order of the results.
+          schema:
+            type: string
+            enum: [recent, oldest, title]
+            default: recent
+      responses:
+        "200":
+          description: A page of articles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedArticles"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Articles]
+      summary: Create an article
+      description: |
+        Publications requires authentication. The slug is generated from the
+        title; hashtags given by name are created automatically when missing.
+      operationId: createArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArticleInput"
+      responses:
+        "201":
+          description: Article created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Article"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/articles/{articleId}:
+    parameters:
+      - $ref: "#/components/parameters/ArticleIdParam"
+    get:
+      tags: [Articles]
+      summary: Get an article
+      description: Public. Drafts (unpublished articles) are only visible to their author.
+      operationId: getArticle
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The requested article.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Article"
+        "403":
+          description: The article is not published and you are not its author.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      security:
+        - bearerAuth: []
+      tags: [Articles]
+      summary: Replace an article
+      description: Updates an article you own. Only the provided fields are applied.
+      operationId: updateArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArticleUpdateInput"
+      responses:
+        "200":
+          description: The updated article.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Article"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      security:
+        - bearerAuth: []
+      tags: [Articles]
+      summary: Update an article
+      description: Partial update of an article you own.
+      operationId: patchArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArticleUpdateInput"
+      responses:
+        "200":
+          description: The updated article.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Article"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Articles]
+      summary: Delete an article
+      description: Deletes an article you own, along with its comments and likes.
+      operationId: deleteArticle
+      responses:
+        "204":
+          description: Article deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------------------
+  # Categories
+  # ------------------------------------------------------------------
+  /api/categories:
+    get:
+      tags: [Categories]
+      summary: List categories
+      operationId: listCategories
+      security: []
+      parameters:
+        - name: q
+          in: query
+          description: Search categories by name.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: All categories, sorted by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Categories]
+      summary: Create a category
+      operationId: createCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "201":
+          description: Category created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: A category with this name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/categories/{categoryId}:
+    parameters:
+      - $ref: "#/components/parameters/CategoryIdParam"
+    get:
+      tags: [Categories]
+      summary: Get a category
+      operationId: getCategory
+      security: []
+      responses:
+        "200":
+          description: The requested category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      security:
+        - bearerAuth: []
+      tags: [Categories]
+      summary: Update a category
+      operationId: updateCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryUpdateInput"
+      responses:
+        "200":
+          description: The updated category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A category with this name already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      security:
+        - bearerAuth: []
+      tags: [Categories]
+      summary: Update a category
+      operationId: patchCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryUpdateInput"
+      responses:
+        "200":
+          description: The updated category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Categories]
+      summary: Delete a category
+      description: Articles that used the category are kept and become uncategorized.
+      operationId: deleteCategory
+      responses:
+        "204":
+          description: Category deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------------------
+  # Tags
+  # ------------------------------------------------------------------
+  /api/tags:
+    get:
+      tags: [Tags]
+      summary: List hashtags
+      description: Returns hashtags, most used first.
+      operationId: listTags
+      security: []
+      parameters:
+        - name: q
+          in: query
+          description: Search tags by name (`#` prefix is ignored).
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of tags to return.
+          schema:
+            type: integer
+            minimum: 1
+          example: 10
+      responses:
+        "200":
+          description: A list of hashtags.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tag"
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Tags]
+      summary: Create a hashtag
+      operationId: createTag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TagInput"
+      responses:
+        "201":
+          description: Tag created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The tag already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tags/{tagId}:
+    parameters:
+      - $ref: "#/components/parameters/TagIdParam"
+    get:
+      tags: [Tags]
+      summary: Get a hashtag
+      operationId: getTag
+      security: []
+      responses:
+        "200":
+          description: The requested tag.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tag"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Tags]
+      summary: Delete a hashtag
+      description: Articles that used the tag are kept.
+      operationId: deleteTag
+      responses:
+        "204":
+          description: Tag deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------------------
+  # Comments
+  # ------------------------------------------------------------------
+  /api/articles/{articleId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/ArticleIdParam"
+    get:
+      tags: [Comments]
+      summary: List an article's comments
+      operationId: listComments
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/PageParam"
+        - name: per_page
+          in: query
+          description: Number of comments per page (max 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: A page of comments, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedComments"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Comments]
+      summary: Comment on an article
+      operationId: createComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommentInput"
+      responses:
+        "201":
+          description: Comment created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/comments/{commentId}:
+    parameters:
+      - $ref: "#/components/parameters/CommentIdParam"
+    get:
+      tags: [Comments]
+      summary: Get a comment
+      operationId: getComment
+      security: []
+      responses:
+        "200":
+          description: The requested comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      security:
+        - bearerAuth: []
+      tags: [Comments]
+      summary: Edit a comment
+      description: Only the author of the comment can edit it.
+      operationId: updateComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommentInput"
+      responses:
+        "200":
+          description: The updated comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      security:
+        - bearerAuth: []
+      tags: [Comments]
+      summary: Edit a comment
+      operationId: patchComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommentInput"
+      responses:
+        "200":
+          description: The updated comment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Comments]
+      summary: Delete a comment
+      description: Only the author of the comment can delete it.
+      operationId: deleteComment
+      responses:
+        "204":
+          description: Comment deleted.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/users/{userId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/UserIdParam"
+    get:
+      tags: [Comments]
+      summary: List a user's comments
+      operationId: listUserComments
+      security: []
+      responses:
+        "200":
+          description: Every comment written by the user, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Comment"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ------------------------------------------------------------------
+  # Likes
+  # ------------------------------------------------------------------
+  /api/articles/{articleId}/likes:
+    parameters:
+      - $ref: "#/components/parameters/ArticleIdParam"
+    get:
+      tags: [Likes]
+      summary: List who liked an article
+      operationId: listLikes
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The likers of the article plus the total count.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LikesSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Likes]
+      summary: Like an article
+      description: |
+        Adds a like for the authenticated user. The operation is idempotent:
+        liking an article twice still returns success (`200` instead of `201`).
+      operationId: likeArticle
+      responses:
+        "201":
+          description: Like added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LikeResult"
+        "200":
+          description: The article was already liked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LikeResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      security:
+        - bearerAuth: []
+      tags: [Likes]
+      summary: Unlike an article
+      operationId: unlikeArticle
+      responses:
+        "204":
+          description: Like removed.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The article does not exist or you never liked it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT access token obtained from `/api/auth/login`."
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      description: Page number (starts at 1).
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PerPageParam:
+      name: per_page
+      in: query
+      description: Number of items per page (max 100).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    ArticleIdParam:
+      name: articleId
+      in: path
+      required: true
+      description: Identifier of the article.
+      schema:
+        type: integer
+        example: 1
+    CategoryIdParam:
+      name: categoryId
+      in: path
+      required: true
+      description: Identifier of the category.
+      schema:
+        type: integer
+        example: 1
+    TagIdParam:
+      name: tagId
+      in: path
+      required: true
+      description: Identifier of the hashtag.
+      schema:
+        type: integer
+        example: 1
+    CommentIdParam:
+      name: commentId
+      in: path
+      required: true
+      description: Identifier of the comment.
+      schema:
+        type: integer
+        example: 1
+    UserIdParam:
+      name: userId
+      in: path
+      required: true
+      description: Identifier of the user.
+      schema:
+        type: integer
+        example: 1
+
+  responses:
+    BadRequest:
+      description: The request payload failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing, invalid or expired access token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: You are not allowed to perform this action on this resource.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    # ----------------------------------------------------------------
+    # Errors & pagination
+    # ----------------------------------------------------------------
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 404
+            message:
+              type: string
+              example: Article with id 42 was not found.
+            details:
+              type: object
+              description: Optional field-level validation errors.
+              additionalProperties: true
+              example:
+                title:
+                  - Shorter than minimum length 3.
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 10
+        total:
+          type: integer
+          example: 42
+        pages:
+          type: integer
+          example: 5
+        has_next:
+          type: boolean
+          example: true
+        has_prev:
+          type: boolean
+          example: false
+
+    PaginatedArticles:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Article"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    PaginatedComments:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Comment"
+        meta:
+          $ref: "#/components/schemas/PaginationMeta"
+
+    ServiceInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          example: Flask Blog API
+        version:
+          type: string
+          example: 1.0.0
+        documentation:
+          type: object
+          additionalProperties:
+            type: string
+        endpoints:
+          type: object
+          additionalProperties:
+            type: string
+
+    # ----------------------------------------------------------------
+    # Users
+    # ----------------------------------------------------------------
+    User:
+      type: object
+      description: Public user representation embedded in articles, comments and likes.
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: alice
+        bio:
+          type: string
+          nullable: true
+          example: Backend engineer, coffee addict.
+        articles_count:
+          type: integer
+          example: 3
+
+    UserPrivate:
+      description: Full user representation returned by the auth endpoints.
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            email:
+              type: string
+              format: email
+              example: alice@example.com
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    UserRegisterInput:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 50
+          example: alice
+        email:
+          type: string
+          format: email
+          example: alice@example.com
+        password:
+          type: string
+          format: password
+          minLength: 6
+          maxLength: 128
+          example: secret123
+        bio:
+          type: string
+          nullable: true
+          maxLength: 500
+          example: Backend engineer, coffee addict.
+
+    UserLoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          description: The username **or** the email address.
+          example: alice
+        password:
+          type: string
+          format: password
+          example: secret123
+
+    UserUpdateInput:
+      type: object
+      properties:
+        bio:
+          type: string
+          nullable: true
+          maxLength: 500
+        password:
+          type: string
+          format: password
+          minLength: 6
+          maxLength: 128
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        user:
+          $ref: "#/components/schemas/UserPrivate"
+
+    # ----------------------------------------------------------------
+    # Categories & tags
+    # ----------------------------------------------------------------
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Technology
+        slug:
+          type: string
+          example: technology
+        description:
+          type: string
+          nullable: true
+          example: Everything about software, hardware and the web.
+        articles_count:
+          type: integer
+          example: 12
+        created_at:
+          type: string
+          format: date-time
+
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+          example: Technology
+        description:
+          type: string
+          nullable: true
+          maxLength: 255
+          example: Everything about software, hardware and the web.
+
+    CategoryUpdateInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 80
+        description:
+          type: string
+          nullable: true
+          maxLength: 255
+
+    Tag:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        name:
+          type: string
+          example: flask
+        slug:
+          type: string
+          example: flask
+        articles_count:
+          type: integer
+          example: 7
+
+    TagInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          description: "Hashtag name, with or without a leading `#`."
+          example: flask
+
+    # ----------------------------------------------------------------
+    # Articles
+    # ----------------------------------------------------------------
+    Article:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: Getting started with Flask
+        slug:
+          type: string
+          example: getting-started-with-flask
+        summary:
+          type: string
+          nullable: true
+          example: Flask is a lightweight WSGI web application framework…
+        content:
+          type: string
+        published:
+          type: boolean
+          example: true
+        author_id:
+          type: integer
+          example: 1
+        category_id:
+          type: integer
+          nullable: true
+          example: 1
+        author:
+          $ref: "#/components/schemas/User"
+        category:
+          allOf:
+            - $ref: "#/components/schemas/Category"
+          nullable: true
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+        comments_count:
+          type: integer
+          example: 2
+        likes_count:
+          type: integer
+          example: 5
+        liked_by_me:
+          type: boolean
+          description: Whether the authenticated caller liked this article.
+          example: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ArticleInput:
+      type: object
+      required: [title, content]
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 200
+          example: Getting started with Flask
+        content:
+          type: string
+          minLength: 1
+          example: Flask is a lightweight WSGI web application framework…
+        summary:
+          type: string
+          nullable: true
+          maxLength: 300
+          description: Optional short description. Derived from the content when omitted.
+        published:
+          type: boolean
+          default: true
+        category_id:
+          type: integer
+          nullable: true
+          example: 1
+        tags:
+          type: array
+          description: Hashtag names. Missing tags are created automatically.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 50
+          example: [flask, python, web]
+
+    ArticleUpdateInput:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 200
+        content:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+          nullable: true
+          maxLength: 300
+        published:
+          type: boolean
+        category_id:
+          type: integer
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 50
+
+    # ----------------------------------------------------------------
+    # Comments & likes
+    # ----------------------------------------------------------------
+    Comment:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        content:
+          type: string
+          example: Thanks, this helped me a lot!
+        author_id:
+          type: integer
+          example: 2
+        article_id:
+          type: integer
+          example: 1
+        author:
+          $ref: "#/components/schemas/User"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CommentInput:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          example: Thanks, this helped me a lot!
+
+    LikesSummary:
+      type: object
+      properties:
+        article_id:
+          type: integer
+          example: 1
+        likes_count:
+          type: integer
+          example: 5
+        liked_by_me:
+          type: boolean
+          example: true
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+    LikeResult:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Article liked.
+        article_id:
+          type: integer
+          example: 1
+        likes_count:
+          type: integer
+          example: 6
+        liked_by_me:
+          type: boolean
+          example: true

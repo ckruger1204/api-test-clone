@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+.mypy_cache/
+.ruff_cache/
+
+*.egg-info/
+dist/
+build/
+
+.env
+config.json
+reports/*
+.api_test_agent/*
+!reports/index.html
+
+# generated_tests/ (tests_dir) est versionnable par défaut : scenarios.json
+# (source de vérité éditable, jamais de secret) et qwen_raw_responses.json
+# peuvent être committés/partagés sans risque.
+#
+# test_generated_api.py, lui, EMBARQUE le token/clé résolu depuis auth.* de
+# config.json en clair (AUTH_HEADERS) quand l'API testée est protégée — ce
+# n'est pas un oubli, request_api() en a besoin pour fonctionner à l'exécution.
+# Comme ce fichier est toujours entièrement régénéré depuis scenarios.json
+# (voir generation/storage.py:render_suite_file), l'ignorer ne fait perdre
+# aucune édition : on modifie scenarios.json, jamais ce fichier directement.
+generated_tests/test_generated_api.py
+# L'historique des exécutions non plus.
+generated_tests/runs/

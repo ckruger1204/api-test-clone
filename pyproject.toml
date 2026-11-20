@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "api-test-agent"
+version = "0.1.0"
+description = "Agent OpenAPI-first de génération et exécution de tests API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "raphaelNguimbus" },
+]
+dependencies = [
+    "PyYAML==6.0.2",
+    "pytest>=7",
+    "loguru"
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff"
+]
+
+[project.scripts]
+api-test-agent = "api_test_agent.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

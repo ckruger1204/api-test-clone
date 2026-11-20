@@ -1,0 +1,15 @@
+{
+    "openapi_spec_path": "examples/demo_flask_api/openapi.yaml",
+    "api_url": "http://127.0.0.1:5000",
+    "model_options": {
+        "model": "qwen2.5-coder:1.5b",
+        "base_url": "http://localhost:11434",
+        "api_key": "ollama"
+    },
+    "auth": {
+        "type": "bearer",
+        "token": "${API_TEST_AGENT_TOKEN}"
+    },
+    "mode": "generate",
+    "tests_dir": "generated_tests"
+}
